@@ -14,135 +14,178 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import pickle
+import traceback
+from typing import Any, ClassVar, List
+
 import numpy as np
 import pandas as pd
-import traceback
-import pickle
-
-from typing import List, ClassVar, Any
-from pydantic import BaseModel, Field
-from umap import UMAP
 from hdbscan import HDBSCAN
+from pydantic import BaseModel, Field
+from sklearn.decomposition import PCA
+from sklearn.metrics import silhouette_samples, silhouette_score
 from tqdm import tqdm
-
-from sklearn.metrics import silhouette_score, silhouette_samples
+from umap import UMAP
 
 
 class TopicClusterGenerator(BaseModel):
-    
+
     module_name: ClassVar[str] = "TopicClusterer"
-    
-    topics_storage_dir: str = Field(default= "./")
-    
-    def detect_umap_nneighbours_optimum(self,
-                                        dataframe: pd.DataFrame,
-                                        range: np.ndarray = np.arange(2,40,2),
-                                        tolerance: int = 0.1) -> pd.DataFrame:
+
+    topics_storage_dir: str = Field(default="./")
+
+    def reduce_pca(self, dataframe: pd.DataFrame):
+
+        embeddings = np.array(dataframe["chunk_embedding"].to_list())
+        mypca = PCA(n_components=8)
+        projection = mypca.fit_transform(embeddings)
+        dataframe["reduced_embedding"] = list(projection)
+
+        return dataframe
+
+    def detect_pca(self, dataframe: pd.DataFrame):
+
+        embeddings = np.array(dataframe["chunk_embedding"].to_list())
+        mypca = PCA(n_components=2)
+        projection = mypca.fit_transform(embeddings)
+        dataframe = dataframe.assign(X=projection[:, 0])
+        dataframe = dataframe.assign(Y=projection[:, 1])
+
+        return dataframe
+
+    def detect_umap_nneighbours_optimum(
+        self, dataframe: pd.DataFrame, range: np.ndarray = np.arange(4, 40, 2), tolerance: int = 0.1
+    ) -> pd.DataFrame:
         cumsums = []
         projections = []
+        if "reduced_embedding" in dataframe:
+            embeddings = np.array(dataframe["reduced_embedding"].to_list())
+        else:
+            embeddings = np.array(dataframe["chunk_embedding"].to_list())
+        distances = np.sqrt(np.sum((embeddings[:, np.newaxis, :] - embeddings[np.newaxis, :, :]) ** 2, axis=-1))
+        distances[distances > 0.0] = 1.0
+        distances[distances == 0.0] = 1e3 * np.finfo(np.float32).eps
         for u in tqdm(range):
             umap_engine = UMAP(n_neighbors=u, metric="cosine")
-            projection = umap_engine.fit_transform(np.array(dataframe["chunk_embedding"].to_list()))
+            projection = umap_engine.fit_transform(embeddings)
+            proj_dists = (
+                np.sqrt(np.sum((projection[:, np.newaxis, :] - projection[np.newaxis, :, :]) ** 2, axis=-1)) / distances
+            )
             projections.append((projection, umap_engine))
-            h,_ = np.histogram(np.sqrt(np.sum((projection[:,np.newaxis,:]-projection[np.newaxis,:,:])**2,axis=-1)).flatten(),
-                               bins=np.arange(0,50,0.1))
+            h, _ = np.histogram(
+                proj_dists.flatten(),
+                bins=np.arange(0, 50, 0.1),
+            )
             cumsums.append(np.cumsum(h))
-            
+
         cumsums = np.array(cumsums)
-        cumsums -= cumsums[0,:]
+        cumsums -= cumsums[0, :]
         var_cumsum = np.diff(cumsums.sum(1))
         opt_umap_nn = [0]
-        for i,_ in enumerate(var_cumsum):
+        for i, _ in enumerate(var_cumsum):
             print(f"{var_cumsum[i:i+3].mean()}, {var_cumsum[i]}, {tolerance * (var_cumsum[:i+1].sum())}")
-            if (var_cumsum[i:i+3].mean()) > tolerance * (var_cumsum[:i+1].sum()):
-                opt_umap_nn += [i+1]
+            if (var_cumsum[i : i + 3].mean()) > tolerance * (var_cumsum[: i + 1].sum()):
+                opt_umap_nn += [i + 1]
             else:
                 if i == 0:
                     continue
                 break
         print(f"optimum nearest neigbours is {range[opt_umap_nn[-1]]}")
-        dataframe = dataframe.assign(X=projections[opt_umap_nn[-1]][0][:,0])
-        dataframe = dataframe.assign(Y=projections[opt_umap_nn[-1]][0][:,1])
-        
+        dataframe = dataframe.assign(X=projections[opt_umap_nn[-1]][0][:, 0])
+        dataframe = dataframe.assign(Y=projections[opt_umap_nn[-1]][0][:, 1])
+
         return dataframe
-    
-    def run_hdbscan(self, dataframe: pd.DataFrame) -> List[int]:
+
+    def run_hdbscan(self, dataframe: pd.DataFrame, columns=["X", "Y"]) -> List[int]:
         """
-            Performs HDBScan to cluster topics
+        Performs HDBScan to cluster topics
         """
         shscore = []
         outliers = []
         skipped_min_samples = []
-        X = np.arange(2,100,1)
-        max_cluster_size = np.round(len(dataframe)/2.0).astype(int)
-        for i in np.arange(2,100,1):
+        X = np.arange(2, 100, 1)
+        unique_embeddings = np.unique(np.array(dataframe["chunk_embedding"].to_list()))
+        max_cluster_size = min(unique_embeddings.shape[0], np.round(len(dataframe) / 2.0).astype(int))
+        for i in np.arange(2, 100, 1):
             try:
-                myhdbscan = HDBSCAN(min_cluster_size=i,
-                                    max_cluster_size=max_cluster_size,
-                                    gen_min_span_tree=True, 
-                                    min_samples=1)
-                labels = myhdbscan.fit_predict(dataframe[['X', 'Y']].to_numpy())
-                projections_xy = dataframe[['X', 'Y']].to_numpy()[labels>=0,:]
+                myhdbscan = HDBSCAN(
+                    min_cluster_size=i, max_cluster_size=max_cluster_size, gen_min_span_tree=True, min_samples=1
+                )
+                labels = myhdbscan.fit_predict(dataframe[columns].to_numpy())
+                projections_xy = dataframe[columns].to_numpy()[labels >= 0, :]
                 if projections_xy.shape[0] == 0:
                     skipped_min_samples.append(i)
                     continue
-                labels_no_outliers = labels[labels>=0]
+                labels_no_outliers = labels[labels >= 0]
                 if len(set(labels_no_outliers)) < 2:
                     continue
-                outliers.append(sum(labels==-1)/len(labels))
-                shscore.append(silhouette_score(projections_xy[:,:],labels=labels_no_outliers[:]))
+                outliers.append(sum(labels == -1) / len(labels))
+
+                shscore.append(silhouette_score(projections_xy[:, :], labels=labels_no_outliers[:]))
             except Exception:
                 print(f"HDBSCAN ERRROR:{traceback.format_exc()}; stopped at iteration {i}")
                 break
         print(f"Skipped min samples: {skipped_min_samples}")
         opt_cluster_size = X[np.argmax(np.array(shscore) - np.array(outliers))]
         print(f"Sscores: {shscore}", opt_cluster_size)
-        
-        myhdbscan = HDBSCAN(min_cluster_size=opt_cluster_size,
-                            max_cluster_size=max_cluster_size,
-                            gen_min_span_tree=True,
-                            min_samples=1)
-        labels = myhdbscan.fit_predict(dataframe[['X', 'Y']].to_numpy())
-        
-        return list(labels)
 
-    def calculate_sihouette_scores(self, 
-                                   dataframe: pd.DataFrame) -> pd.DataFrame:
-        dataframe = dataframe.assign(silhouette_score = silhouette_samples(dataframe[['X', 'Y']].to_numpy(),
-                                                                           labels=dataframe.label.to_list()))
-        
+        projection = dataframe[["X", "Y"]].to_numpy()
+        proj_dist = np.sqrt(np.sum((projection[:, np.newaxis, :] - projection[np.newaxis, :, :]) ** 2, axis=-1))
+        max_dist = max(proj_dist.flatten())
+        print(f"{max_dist=}", type(max_dist))
+        myhdbscan = HDBSCAN(
+            min_cluster_size=opt_cluster_size,
+            max_cluster_size=max_cluster_size,
+            gen_min_span_tree=True,
+            min_samples=1,
+            cluster_selection_epsilon=float(0.05*max_dist),
+        )
+
+        labels = myhdbscan.fit_predict(dataframe[["X", "Y"]].to_numpy())
+        new_labels = np.copy(labels)
+        for j, lbl in enumerate(labels):
+            if lbl == -1:
+                tmp_dist = proj_dist[j, :]
+                tmp_dist[labels == -1] = 1e9
+                new_labels[j] = labels[np.argmin(tmp_dist)]
+
+        return list(new_labels)
+
+    def calculate_sihouette_scores(self, dataframe: pd.DataFrame) -> pd.DataFrame:
+        dataframe = dataframe.assign(
+            silhouette_score=silhouette_samples(dataframe[["X", "Y"]].to_numpy(), labels=dataframe.label.to_list())
+        )
+
         return dataframe
 
-    def cluster_datapoints(self,
-                           dataframe: pd.DataFrame, 
-                            ) -> pd.DataFrame:
+    def cluster_datapoints(self, dataframe: pd.DataFrame, projection_function: str = None) -> pd.DataFrame:
         """
-            Clusteres the topics with th optimal settings
+        Clusteres the topics with th optimal settings
         """
+        if not projection_function:
+            dataframe = self.reduce_pca(dataframe)
+            projection_function = "detect_umap_nneighbours_optimum"
         try:
-            projected_df = self.detect_umap_nneighbours_optimum(dataframe)
+            projf = getattr(self, projection_function)
+            projected_df = projf(dataframe)
             projected_df = projected_df.assign(label=self.run_hdbscan(projected_df))
             projected_df = self.calculate_sihouette_scores(projected_df)
-            
+
         except Exception:
             print(traceback.format_exc())
-   
+
         return projected_df
-    
-    def save_topics_df(self,
-                       dataframe: pd.DataFrame,
-                       docname: str = 'document') -> None:
+
+    def save_topics_df(self, dataframe: pd.DataFrame, docname: str = "document") -> None:
         """
-            Saves the generated topics dataframe into a pickle file
+        Saves the generated topics dataframe into a pickle file
         """
-        with open(self.topics_storage_dir + docname + "_chunk_topics.pkl","wb") as f:
-            pickle.dump(dataframe, f)    
-    
-    def __call__(self,
-                 input: pd.DataFrame,
-                 docname: str) -> pd.DataFrame:
-        
-        df_with_clusters = self.cluster_datapoints(input)
-        self.save_topics_df(df_with_clusters,docname)
-        
+        with open(self.topics_storage_dir + docname + "_chunk_topics.pkl", "wb") as f:
+            pickle.dump(dataframe, f)
+
+    def __call__(self, input: pd.DataFrame, docname: str, **kwargs) -> pd.DataFrame:
+
+        df_with_clusters = self.cluster_datapoints(input, **kwargs)
+        self.save_topics_df(df_with_clusters, docname)
+
         return df_with_clusters

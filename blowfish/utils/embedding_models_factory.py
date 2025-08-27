@@ -15,23 +15,26 @@ limitations under the License.
 """
 
 from typing import List
+
 import numpy as np
-from sentence_transformers import SentenceTransformer
-from langchain_openai.embeddings.azure import AzureOpenAIEmbeddings
 from langchain_openai.embeddings import OpenAIEmbeddings
+from langchain_openai.embeddings.azure import AzureOpenAIEmbeddings
+from sentence_transformers import SentenceTransformer
+
 
 class OpenAIEmbeddingWrapper(OpenAIEmbeddings):
     def encode(self, documents: List[str]) -> np.ndarray:
         results = np.array(self.embed_documents(documents))
         return results
 
+
 class AZOpenAIEmbeddingWrapper(AzureOpenAIEmbeddings):
     def encode(self, documents: List[str]) -> np.ndarray:
         results = np.array(self.embed_documents(documents))
         return results
 
-class EmbeddingModelHooks():
+
+class EmbeddingModelHooks:
     sentence_transformer = SentenceTransformer
     azure_openai = AZOpenAIEmbeddingWrapper
     openai = OpenAIEmbeddingWrapper
-        

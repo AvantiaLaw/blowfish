@@ -14,60 +14,57 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
+import json
+import os
+from typing import Any, ClassVar, List, Tuple
+
 import numpy as np
 import pandas as pd
-import os
-import json
-from faiss import write_index, read_index, IndexFlatL2
-from typing import List, ClassVar, Any, Tuple
+from faiss import IndexFlatL2, read_index, write_index
 from pydantic import BaseModel, Field
 
 from blowfish.utils.embedding_models_factory import EmbeddingModelHooks
-   
+
+
 class FaissVDBIndexing(BaseModel):
-    
+
     module_name: ClassVar[str] = "FaissIndexer"
-    
+
     vdb_path: str = Field(default="./faiss.index")
     json_index_path: str = Field(default="./index.json")
     vdb_reset_faiss_index: bool = Field(default=False)
     vdb_vector_size: int = Field()
-    
-    def save_index(self,
-                   vector_index: IndexFlatL2,
-                   index_mapping: list):
+
+    def save_index(self, vector_index: IndexFlatL2, index_mapping: list):
         write_index(vector_index, self.vdb_path)
         with open(self.json_index_path, "w") as f:
             json.dump({"map": index_mapping}, f)
-            
+
     def load_index(self):
         vector_index = read_index(self.vdb_path)
         with open(self.json_index_path, "r") as f:
             index_mapping = json.load(f)["map"]
         return vector_index, index_mapping
-                
+
     def reset_index(self):
         vector_index = IndexFlatL2(self.vdb_vector_size)
         index_mapping = []
-        self.save_index(vector_index,index_mapping)
+        self.save_index(vector_index, index_mapping)
         return vector_index, index_mapping
-    
-    
-    def __call__(self, 
-                 input: pd.DataFrame) -> Tuple:
-        
+
+    def __call__(self, input: pd.DataFrame) -> Tuple:
+
         if not os.path.isfile(self.vdb_path):
             vector_index, index_mapping = self.reset_index()
         elif self.vdb_reset_faiss_index:
             vector_index, index_mapping = self.reset_index()
-        else: 
+        else:
             vector_index, index_mapping = self.load_index()
-            
-            
+
         vectors = np.array(input["chunk_embedding"].to_list())
         hash_keys = input["hash_key"].to_list()
         vector_index.add(vectors)
         index_mapping += hash_keys
         self.save_index(vector_index, index_mapping)
-        
+
         return vector_index, index_mapping
