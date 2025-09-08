@@ -19,7 +19,7 @@ from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
-from gtda.homology import VietorisRipsPersistence
+from ripser import Rips
 
 
 def calculate_scaled_distance_distribution(sub_df: pd.DataFrame, *args) -> Dict[str, Any]:
@@ -42,7 +42,7 @@ def calculate_first_order_homology_distribution(sub_df: pd.DataFrame, depsilon, 
     Calculates the topological features for the embeddings of both the query and retrieved chunks
     """
     try:
-        vietorisRipsGenerator = VietorisRipsPersistence(homology_dimensions=(0, 1))
+        rips = Rips()
         mask = (np.sort(sub_df.score) / np.sort(sub_df.score)[0]) <= depsilon
         if sum(mask) < 5:
             raise ValueError
@@ -54,10 +54,10 @@ def calculate_first_order_homology_distribution(sub_df: pd.DataFrame, depsilon, 
             renormalised_embeddings / np.linalg.norm(renormalised_embeddings, axis=-1)[:, np.newaxis]
         )
 
-        diagrams = vietorisRipsGenerator.fit_transform(renormalised_embeddings[np.newaxis, :, :])
+        diagrams = rips.fit_transform(renormalised_embeddings[:, :])
 
-        neighbour_0th_homology = diagrams[diagrams[:, :, 2] == 0, :][:, 1]
-        neighbour_1st_homology = diagrams[diagrams[:, :, 2] == 1, :][:, :2]
+        neighbour_0th_homology = diagrams[0][:-1, 1]
+        neighbour_1st_homology = diagrams[1][:, :2]
 
         holes_lifetimes = neighbour_1st_homology[:, 1] - neighbour_1st_homology[:, 0]
         homology_distribution = {
