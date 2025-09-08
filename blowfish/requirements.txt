@@ -11,4 +11,4 @@ scikit-learn==1.6.1
 numba==0.59.0
 pynndescent==0.5.11
 shap==0.43.0
-ripser==0.6.2
+ripser==0.6.12
