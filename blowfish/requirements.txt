@@ -9,7 +9,7 @@ langchain-openai==0.1.7
 sentence-transformers==4.0.1
 umap-learn==0.5.7
 hdbscan==0.8.40
-scikit-learn==1.6.2
+scikit-learn==1.6.1
 numba==0.59.0
 pynndescent==0.5.11
 shap==0.43.0
