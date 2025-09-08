@@ -4,7 +4,7 @@ faiss-cpu==1.8.0
 httpx==0.27.0
 levenshtein==0.26.1
 pandas==2.2.2
-giotto-tda==0.6.2
+giotto-tda-nightly
 langchain-openai==0.1.7
 sentence-transformers==4.0.1
 umap-learn==0.5.7
